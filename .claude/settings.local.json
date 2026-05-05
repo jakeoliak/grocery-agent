@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(brew install *)",
+      "Bash(git -C /Users/jakeoliak/projects/grocery-agent remote -v)",
+      "Bash(git init *)",
+      "Bash(gh repo *)",
+      "Bash(git remote *)",
+      "Bash(npm create *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(cp *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(git add *)"
+    ]
+  }
+}
