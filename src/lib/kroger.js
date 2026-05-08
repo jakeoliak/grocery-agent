@@ -18,12 +18,12 @@ let _tokenExpiresAt = 0
 function getCredentials() {
   // Support both Node script env vars and Vite-prefixed browser env vars.
   const clientId =
-    (typeof process !== 'undefined' && process.env?.KROGER_CLIENT_ID) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_KROGER_CLIENT_ID)
+    globalThis.process?.env?.KROGER_CLIENT_ID ||
+    import.meta.env?.VITE_KROGER_CLIENT_ID
 
   const clientSecret =
-    (typeof process !== 'undefined' && process.env?.KROGER_CLIENT_SECRET) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_KROGER_CLIENT_SECRET)
+    globalThis.process?.env?.KROGER_CLIENT_SECRET ||
+    import.meta.env?.VITE_KROGER_CLIENT_SECRET
 
   if (!clientId || !clientSecret) {
     throw new Error(

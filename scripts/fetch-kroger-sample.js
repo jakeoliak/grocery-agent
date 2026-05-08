@@ -7,7 +7,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
-import { getAccessToken, searchProducts, getStoreLocations } from '../src/lib/kroger.js'
+import { searchProducts, getStoreLocations } from '../src/lib/kroger.js'
 
 const SAMPLE_ZIP = '93117'
 
@@ -120,7 +120,7 @@ async function upsertStore(location) {
   return data
 }
 
-async function insertFoodAndPrice(product, storeId, term) {
+async function insertFoodAndPrice(product, storeId) {
   // Check if food already exists by external_id (productId) + source
   const { data: existing } = await supabase
     .from('foods')
@@ -216,7 +216,7 @@ async function run() {
         skipped++
       } else {
         const product = products[0]
-        const { wasNew } = await insertFoodAndPrice(product, store.id, term)
+        const { wasNew } = await insertFoodAndPrice(product, store.id)
         const priceStr = product.priceCents ? `$${(product.priceCents / 100).toFixed(2)}` : 'no price'
         console.log(`${wasNew ? '✓' : 'SKIP (exists)'} ${product.name} — ${priceStr}`)
         wasNew ? inserted++ : skipped++
