@@ -32,13 +32,37 @@ function sleep(ms) {
 }
 
 // Strips brand/packaging noise so FDC can match cleanly.
-// e.g. "Organic Boneless Skinless Chicken Breast" → "chicken breast"
+// e.g. "Kroger® 85/15 Fresh Ground Turkey Tray 3 LB" → "ground turkey"
 function cleanName(name) {
   return name
-    .replace(/organic|raw|frozen|shelled|fresh|lowfat|low-fat|reduced fat|unsalted|salted|creamy|crunchy|wild|alaskan|boneless|skinless|virgin|unrefined|extra virgin/gi, '')
+    // strip brand word(s) immediately before ® or ™ (e.g. "Kroger®", "Western Hearth®")
+    .replace(/[\w][\w\s'-]*?[®™]/g, '')
+    // strip remaining ® ™ © symbols
+    .replace(/[®™©]/g, '')
+    // strip numeric noise: ratios (85/15), percentages (2%), weight/count units (3 LB, 12 OZ)
+    .replace(/\d+\/\d+|\d+\s*%|\d+\s*(?:lb|oz|g|kg|ml|ct|lbs)\b/gi, '')
+    // strip common brand names without trademark symbols
+    .replace(/\b(?:barilla|bob'?s\s+red\s+mill|western\s+hearth|simple\s+truth|private\s+selection)\b/gi, '')
+    // strip packaging, marketing, and descriptor noise
+    .replace(/\b(?:organic|raw|frozen|shelled|fresh|low.?fat|reduced\s+fat|unsalted|salted|creamy|crunchy|wild|alaskan|boneless|skinless|virgin|unrefined|extra\s+virgin|gluten.?free|non.?gmo|kosher|old\s+fashioned|wild\s+caught|value\s+pack|big\s+deal|made\s+with|bag\s+salad|tray|fillets?|cut\s+and\s+peeled|long\s+grain|small\s+curd|tender)\b/gi, '')
+    // strip punctuation that causes FDC query errors
+    .replace(/[!?#@$^&*()]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()
+}
+
+// FDC nutrient ID → output field name. Units are encoded in the field name.
+const MICRO_NUTRIENTS = {
+  1003: 'protein_g',
+  1079: 'fiber_g',
+  1004: 'fat_g',
+  1258: 'sat_fat_g',
+  1093: 'sodium_mg',
+  2000: 'sugars_g',
+  1087: 'calcium_mg',
+  1089: 'iron_mg',
+  1092: 'potassium_mg',
 }
 
 async function fetchNutrition(foodName) {
@@ -48,24 +72,50 @@ async function fetchNutrition(foodName) {
 
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`FDC ${res.status}: ${text.slice(0, 200)}`)
+    throw new Error(`FDC search ${res.status}: ${text.slice(0, 200)}`)
   }
 
   const data = await res.json()
   if (!data.foods || data.foods.length === 0) return null
 
-  const nutrients = data.foods[0].foodNutrients
+  const hit = data.foods[0]
+  const nutrients = hit.foodNutrients
   const get = id => nutrients.find(n => n.nutrientId === id)?.value ?? null
 
   return {
+    fdcId:                hit.fdcId,
     calories_per_serving: get(1008),
     protein_g:            get(1003),
     fat_g:                get(1004),
     carbs_g:              get(1005),
-    fiber_g:              null,  // FDC ID 1079; not in specified set — leave null
-    serving_size_g:       null,  // not reliably present in search results
+    fiber_g:              null,
+    serving_size_g:       null,
     micros:               {},
   }
+}
+
+// Second call: food-detail endpoint returns full foodNutrients with nested nutrient.id
+async function fetchMicros(fdcId) {
+  const url = `https://api.nal.usda.gov/fdc/v1/food/${fdcId}?api_key=${process.env.FDC_API_KEY}`
+  const res = await fetch(url)
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`FDC detail ${res.status}: ${text.slice(0, 200)}`)
+  }
+
+  const data = await res.json()
+  const micros = {}
+
+  for (const entry of data.foodNutrients ?? []) {
+    const id = entry.nutrient?.id
+    const field = MICRO_NUTRIENTS[id]
+    if (field && entry.amount != null) {
+      micros[field] = entry.amount
+    }
+  }
+
+  return micros
 }
 
 // A result is considered a clean match if calories are present.
@@ -90,14 +140,16 @@ async function run() {
     return
   }
 
-  console.log(`Enriching ${foods.length} foods (1 req/sec)...\n`)
+  console.log(`Enriching ${foods.length} foods (2 reqs/match, 1 req/skip)...\n`)
 
   let enriched = 0
+  let microsPopulated = 0
   let skipped = 0
   let failed = 0
 
   for (let i = 0; i < foods.length; i++) {
     const food = foods[i]
+    const isLast = i === foods.length - 1
     process.stdout.write(`[${i + 1}/${foods.length}] ${food.name} ... `)
 
     try {
@@ -106,7 +158,15 @@ async function run() {
       if (!isCleanMatch(nutrition)) {
         console.log('SKIP (no clean match)')
         skipped++
+        if (!isLast) await sleep(1000)
+      } else if (!nutrition.fdcId) {
+        console.log('SKIP (no fdcId in search result)')
+        skipped++
+        if (!isLast) await sleep(1000)
       } else {
+        // Second call: fetch detailed micronutrients using fdcId from search result
+        const micros = await fetchMicros(nutrition.fdcId)
+
         const { error: updateErr } = await supabase
           .from('foods')
           .update({
@@ -119,28 +179,30 @@ async function run() {
             ...(food.serving_size_g === null && nutrition.serving_size_g
               ? { serving_size_g: nutrition.serving_size_g }
               : {}),
-            micros: nutrition.micros,
+            micros,
             updated_at: new Date().toISOString(),
           })
           .eq('id', food.id)
 
         if (updateErr) throw new Error(updateErr.message)
-        console.log(`OK (${nutrition.calories_per_serving} kcal)`)
+        const microsCount = Object.keys(micros).length
+        if (microsCount > 0) microsPopulated++
+        console.log(`OK (${nutrition.calories_per_serving} kcal, ${microsCount} micros)`)
         enriched++
+        if (!isLast) await sleep(2000)  // 2 reqs made — pace accordingly
       }
     } catch (err) {
       console.log(`ERROR: ${err.message}`)
       failed++
+      if (!isLast) await sleep(1000)
     }
-
-    // Rate limit: 1 req/sec — skip the sleep after the last item
-    if (i < foods.length - 1) await sleep(1000)
   }
 
   console.log('\n─────────────────────────────────────────')
-  console.log(`  Enriched : ${enriched}`)
-  console.log(`  Skipped  : ${skipped} (no clean FDC match)`)
-  console.log(`  Failed   : ${failed} (API or DB errors)`)
+  console.log(`  Enriched        : ${enriched}`)
+  console.log(`  Micros populated: ${microsPopulated}`)
+  console.log(`  Skipped         : ${skipped} (no clean FDC match)`)
+  console.log(`  Failed          : ${failed} (API or DB errors)`)
   console.log('─────────────────────────────────────────')
 }
 
