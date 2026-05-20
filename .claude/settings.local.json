@@ -11,7 +11,15 @@
       "Bash(cp *)",
       "Bash(npm install *)",
       "Bash(npm run *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(gh auth *)",
+      "Bash(git pull *)",
+      "Bash(git stash *)",
+      "Bash(curl -s -X POST https://www.traderjoes.com/api/graphql -H 'Content-Type: application/json' -H 'Origin: https://www.traderjoes.com' -H 'Referer: https://www.traderjoes.com/' -d '{ *)",
+      "Bash(curl *)",
+      "Bash(node *)"
     ]
   }
 }
